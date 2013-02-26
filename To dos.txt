@@ -1,0 +1,1 @@
+Add settings window where you can configure the app.config stuff

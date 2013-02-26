@@ -1,0 +1,39 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 2012
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Requirements", "Requirements", "{305CD66F-6D14-49E6-8158-583C88945CA8}"
+	ProjectSection(SolutionItems) = preProject
+		BufferSizes.txt = BufferSizes.txt
+		To dos.txt = To dos.txt
+		User Needs.txt = User Needs.txt
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataSafeLibrary", "DataSafeLibrary\DataSafeLibrary.csproj", "{2892C9CD-D4CF-4C6A-A176-40600D2950F9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataSafeWpf", "DataSafeWpf\DataSafeWpf.csproj", "{A547EB80-22A3-4F6D-9BD3-8F3357A30C2D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WpfEnhancements", "WpfEnhancements\WpfEnhancements.csproj", "{B78FBCCE-1AE8-4A6E-B61B-2B489BD151F0}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{2892C9CD-D4CF-4C6A-A176-40600D2950F9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2892C9CD-D4CF-4C6A-A176-40600D2950F9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2892C9CD-D4CF-4C6A-A176-40600D2950F9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2892C9CD-D4CF-4C6A-A176-40600D2950F9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A547EB80-22A3-4F6D-9BD3-8F3357A30C2D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A547EB80-22A3-4F6D-9BD3-8F3357A30C2D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A547EB80-22A3-4F6D-9BD3-8F3357A30C2D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A547EB80-22A3-4F6D-9BD3-8F3357A30C2D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B78FBCCE-1AE8-4A6E-B61B-2B489BD151F0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B78FBCCE-1AE8-4A6E-B61B-2B489BD151F0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B78FBCCE-1AE8-4A6E-B61B-2B489BD151F0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B78FBCCE-1AE8-4A6E-B61B-2B489BD151F0}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

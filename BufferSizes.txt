@@ -1,0 +1,7 @@
+Encryption Action on 697MB AVI file.
+
+5MB Buffer - 0:59
+1MB Buffer - 0:58
+500K Buffer - 1:00
+100K Buffer - 1:02
+50K Buffer - 1:18

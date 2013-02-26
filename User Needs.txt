@@ -1,0 +1,7 @@
+Allow encryption of files and directories
+Be performant
+Low memory usage
+Should be optionally run as a background process (low priority / low CPU usage)
+Should be able to do text encryption in a GUI as well as file encryption
+should be unobtrusive - maybe live in the task tray
+user should be able to set the prefix of encrypted file names if desired
