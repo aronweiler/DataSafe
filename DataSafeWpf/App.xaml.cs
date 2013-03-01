@@ -31,13 +31,15 @@ namespace DataSafeWpf
 					// There is already a DataSafe app running... call into it and pass the arguments then close this instance
 					try
 					{
-						ChannelFactory<IDataSafeInterface> dataSafeClientFactory = new ChannelFactory<IDataSafeInterface>("DataSafeInterfaceClient");
-						IDataSafeInterface dataSafeInterface = dataSafeClientFactory.CreateChannel();
+						using (ChannelFactory<IDataSafeInterface> dataSafeClientFactory = new ChannelFactory<IDataSafeInterface>("DataSafeInterfaceClient"))
+						{
+							IDataSafeInterface dataSafeInterface = dataSafeClientFactory.CreateChannel();
 
-						if (dataSafeInterface.IsServiceAcceptingRequests())
-							dataSafeInterface.AddFileToProcess(args[0]);
-						else
-							throw new Exception();
+							if (dataSafeInterface.IsServiceAcceptingRequests())
+								dataSafeInterface.AddFileToProcess(args[0]);
+							else
+								throw new Exception();
+						}
 					}
 					catch (Exception ex)
 					{
@@ -64,7 +66,7 @@ namespace DataSafeWpf
 
 		void Instance_ApplicationStarted()
 		{
-			Encryption.DataSafeInterface.AddFileToProcess(args[0]);
+			Encryption.Instance.DataSafeInterface.AddFileToProcess(args[0]);
 		}
 	}
 }

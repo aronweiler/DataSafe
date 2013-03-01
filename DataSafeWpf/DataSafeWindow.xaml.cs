@@ -35,11 +35,13 @@ namespace DataSafeWpf
 		System.Windows.Forms.NotifyIcon niDataSafe;
 		System.Windows.Forms.ContextMenuStrip ctxDataSafeMenu;
 
+		Settings settings = new Settings();
+
 		public DataSafeWindow()
 		{
 			InitializeComponent();
 
-			Settings.AssociateFiles(".enc", Assembly.GetExecutingAssembly().Location);
+			DataSafeRegistrySettings.AssociateFiles(".enc", Assembly.GetExecutingAssembly().Location);
 
 			CreateContextMenu();
 			CreateNotifyIcon();
@@ -53,12 +55,10 @@ namespace DataSafeWpf
 			Encryption.Instance.WipingSourceFileBlockFinished += fileEncryption_WipingSourceFileBlockFinished;
 			Encryption.Instance.GetPassword += fileEncryption_GetPassword;
 
-			if (ConfigurationManager.AppSettings["AlwaysOnTop"] != null)
-				this.Topmost = Convert.ToBoolean(ConfigurationManager.AppSettings["AlwaysOnTop"]);
+			this.Topmost = settings.AlwaysOnTop;
 
-			if (ConfigurationManager.AppSettings["StartHidden"] != null)
-				if (Convert.ToBoolean(ConfigurationManager.AppSettings["StartHidden"]))
-					this.Hide();
+			if (settings.StartHidden)
+				this.Hide();
 
 			Encryption.Instance.AppStarted();
 		}
@@ -202,7 +202,7 @@ namespace DataSafeWpf
 		{
 			this.Cursor = Cursors.Wait;
 
-			string[] files = Encryption.Instance.GetDecryptedFilesOnly(e.Data.GetData(DataFormats.FileDrop) as string[]);
+			string[] files = Encryption.Instance.GetFilesOfType(e.Data.GetData(DataFormats.FileDrop) as string[], false);
 
 			this.Cursor = Cursors.Arrow;
 
@@ -225,7 +225,7 @@ namespace DataSafeWpf
 		{
 			this.Cursor = Cursors.Wait;
 
-			string[] files = Encryption.Instance.GetEncryptedFilesOnly(e.Data.GetData(DataFormats.FileDrop) as string[]);
+			string[] files = Encryption.Instance.GetFilesOfType(e.Data.GetData(DataFormats.FileDrop) as string[], true);
 
 			this.Cursor = Cursors.Arrow;
 

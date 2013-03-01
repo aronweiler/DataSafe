@@ -9,6 +9,7 @@ using System.Configuration;
 using System.ServiceModel;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
+using System.Threading.Tasks;
 
 namespace DataSafeLibrary
 {
@@ -33,19 +34,17 @@ namespace DataSafeLibrary
 		public event OnGetPassword GetPassword;
 		public event OnAppStarted ApplicationStarted;
 
+		static readonly Settings settings = new Settings();
+
 		static readonly int passwordIterations = 1000;
 		static readonly int passwordSaltSize = 8;
 		static readonly int passwordSize = 16;
 
-		string DataSafeFileNamePrefix = "DataSafe";
-		static readonly string DataSafeFileExtension = ".enc";
-		readonly bool HideFileNames = true;
-		readonly bool WipeSourceFiles = false;
-		readonly int WipeSourceFilesPasses = 1;
+		static readonly string dataSafeFileNamePrefix = "DataSafe";
+		static readonly string dataSafeFileExtension = ".enc";
 
 		byte[] readBuffer;
-		byte[] zeroBuffer;
-		byte[] oneBuffer;
+		byte[] writeBuffer;
 
 		const uint FILE_FLAG_NO_BUFFERING = 0x20000000;
 
@@ -60,33 +59,39 @@ namespace DataSafeLibrary
 			IntPtr hTemplate // template file  
 			);
 
-		// For large files this is the best performing buffer size
-		static byte[] buffer = new byte[32768];
-
 		Queue<PasswordAndFiles> filesToProcess = new Queue<PasswordAndFiles>();
 
 		int counter = 0;
 		int totalFiles;
-		Thread processThread;
 		ManualResetEvent mreFilesReady = new ManualResetEvent(false);
+		Thread processThread;
 
+		static object lockObject = new object();
 		static Encryption instance;
-		static IDataSafeInterface dataSafeInterface = new DataSafeInterface();
+		IDataSafeInterface dataSafeInterface = new DataSafeInterface();
 
 		ServiceHost host;
 
-		public static IDataSafeInterface DataSafeInterface
+		public IDataSafeInterface DataSafeInterface
 		{
-			get { return Encryption.dataSafeInterface; }
-			set { Encryption.dataSafeInterface = value; }
+			get { return dataSafeInterface; }
+			set { dataSafeInterface = value; }
 		}
 
 		public static Encryption Instance
 		{
-			get
+			get 
 			{
 				if (instance == null)
-					instance = new Encryption();
+				{
+					lock (lockObject)
+					{
+						if (instance == null)
+						{
+							instance = new Encryption();
+						}
+					}
+				}
 
 				return instance;
 			}
@@ -94,38 +99,14 @@ namespace DataSafeLibrary
 
 		Encryption()
 		{
-			int bufferSize = 10240;
-			ThreadPriority threadPriority = ThreadPriority.Normal;
+			readBuffer = new byte[settings.ReadBufferSizeInBytes];
+			writeBuffer = new byte[settings.WriteBufferSizeInBytes];
 
-			if (ConfigurationManager.AppSettings["BufferSizeInBytes"] != null)
-				bufferSize = Convert.ToInt32(ConfigurationManager.AppSettings["BufferSizeInBytes"]);
-
-			if (ConfigurationManager.AppSettings["EncryptedFilePrefix"] != null)
-				DataSafeFileNamePrefix = ConfigurationManager.AppSettings["EncryptedFilePrefix"];
-
-			if (ConfigurationManager.AppSettings["EncryptionThreadPriority"] != null)
-				threadPriority = (ThreadPriority)Enum.Parse(typeof(ThreadPriority), ConfigurationManager.AppSettings["EncryptionThreadPriority"]);
-
-			if (ConfigurationManager.AppSettings["HideFileNames"] != null)
-				HideFileNames = Convert.ToBoolean(ConfigurationManager.AppSettings["HideFileNames"]);
-
-			if (ConfigurationManager.AppSettings["WipeSourceFiles"] != null)
-				WipeSourceFiles = Convert.ToBoolean(ConfigurationManager.AppSettings["WipeSourceFiles"]);
-
-			if (ConfigurationManager.AppSettings["WipeSourceFilesPasses"] != null)
-				WipeSourceFilesPasses = Convert.ToInt32(ConfigurationManager.AppSettings["WipeSourceFilesPasses"]);
-
-			readBuffer = new byte[bufferSize];
-			zeroBuffer = new byte[bufferSize];
-			oneBuffer = new byte[bufferSize];
-			FillOneBuffer();
+			StartDataSafeInterfaceService();
 
 			processThread = new Thread(ProcessFiles);
 			processThread.IsBackground = true;
-			processThread.Priority = threadPriority;
 			processThread.Start();
-
-			StartDataSafeInterfaceService();
 		}
 
 		public void AppStarted()
@@ -140,18 +121,12 @@ namespace DataSafeLibrary
 
 			host.Open();
 		}
-
-		void FillOneBuffer()
-		{
-			for (int i = 0; i < oneBuffer.Length; i++)
-				oneBuffer[i] = 1;
-		}
-
-		public string[] GetEncryptedFilesOnly(string[] files)
+		
+		public string[] GetFilesOfType(string[] files, bool encrypted)
 		{
 			files = ReplaceDirectoriesWithFiles(files);
 
-			List<string> encryptedFiles = new List<string>();
+			List<string> returnedFiles = new List<string>();
 
 			foreach (string file in files)
 			{
@@ -159,56 +134,21 @@ namespace DataSafeLibrary
 				{
 					using (FileStream inputFile = File.Open(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
 					{
-						// Get the header information
-						byte[] headerBytes = new byte[EncryptionTypes.AesEncryptionId.Length];
-						inputFile.Read(headerBytes, 0, headerBytes.Length);
+						bool fileCheckResult = EncryptionHeader.CheckFileType(new BinaryReader(inputFile));
 
-						inputFile.Position = 0;
-
-						EncryptionHeader header = new EncryptionHeader(headerBytes);
-
-						if (header.HeaderEncryptionType != EncryptionHeaderType.Unknown)
-							encryptedFiles.Add(file);
+						if (encrypted && fileCheckResult)
+							returnedFiles.Add(file);
+						else if (!encrypted && !fileCheckResult)
+							returnedFiles.Add(file);
 					}
 				}
 				catch
 				{
+					// Skip this file
 				}
 			}
 
-			return encryptedFiles.ToArray();
-		}
-
-		public string[] GetDecryptedFilesOnly(string[] files)
-		{
-			files = ReplaceDirectoriesWithFiles(files);
-
-			List<string> decryptedFiles = new List<string>();
-
-			foreach (string file in files)
-			{
-				try
-				{
-					using (FileStream inputFile = File.Open(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-					{
-						// Get the header information
-						byte[] headerBytes = new byte[EncryptionTypes.AesEncryptionId.Length];
-						inputFile.Read(headerBytes, 0, headerBytes.Length);
-
-						inputFile.Position = 0;
-
-						EncryptionHeader header = new EncryptionHeader(headerBytes);
-
-						if (header.HeaderEncryptionType == EncryptionHeaderType.Unknown)
-							decryptedFiles.Add(file);
-					}
-				}
-				catch
-				{
-				}
-			}
-
-			return decryptedFiles.ToArray();
+			return returnedFiles.ToArray();
 		}
 
 		public void AddFiles(PasswordAndFiles passwordAndFiles)
@@ -238,12 +178,12 @@ namespace DataSafeLibrary
 			}
 		}
 
-		void ReplaceDirectoriesWithFiles(PasswordAndFiles passwordAndFiles)
+		private void ReplaceDirectoriesWithFiles(PasswordAndFiles passwordAndFiles)
 		{
 			passwordAndFiles.Files = ReplaceDirectoriesWithFiles(passwordAndFiles.Files);
 		}
 
-		string[] ReplaceDirectoriesWithFiles(string[] oldFiles)
+		private string[] ReplaceDirectoriesWithFiles(string[] oldFiles)
 		{
 			List<string> files = new List<string>();
 
@@ -262,7 +202,7 @@ namespace DataSafeLibrary
 			return files.ToArray();
 		}
 
-		List<string> GetAllFilesInDirectories(string[] directories)
+		private List<string> GetAllFilesInDirectories(string[] directories)
 		{
 			List<string> files = new List<string>();
 
@@ -279,7 +219,7 @@ namespace DataSafeLibrary
 			return files;
 		}
 
-		void ProcessFiles()
+		private void ProcessFiles()
 		{
 			while (mreFilesReady.WaitOne())
 			{
@@ -316,7 +256,7 @@ namespace DataSafeLibrary
 			}
 		}
 
-		void EncryptFiles(PasswordAndFiles passwordAndFiles)
+		private void EncryptFiles(PasswordAndFiles passwordAndFiles)
 		{
 			foreach (string file in passwordAndFiles.Files)
 			{
@@ -325,33 +265,31 @@ namespace DataSafeLibrary
 					if (FileStarted != null)
 						FileStarted(file);
 
-					// Perform a seperate encryption function to encrypt the header information
-					EncryptionHeader header = new EncryptionHeader(EncryptionHeaderType.Rijndael, Path.GetFileName(file));
+					FileInfo fileInfo = new FileInfo(file);
 
-					byte[] headerBytes = header.GetEncryptedHeader(passwordAndFiles.Password);
+					// Perform a seperate encryption function to encrypt the header information
+					EncryptionHeader header = new EncryptionHeader(Path.GetFileName(file), fileInfo.LastWriteTime);
+
+					// Create an IV
+					byte[] iv = new byte[HeaderInfo.IvSize];
+					RNGCryptoServiceProvider.Create().GetBytes(iv);
+
+					byte[] headerBytes = header.Create(iv, passwordAndFiles.Password);
 
 					string newInputFileName = file;
 					string encryptedFileName = file;
 
-					if (!HideFileNames)
-					{
-						newInputFileName += ".encrypting";
-
-						File.Move(file, newInputFileName);
-					}
-					else
-					{
-						encryptedFileName = GetVerifiedUniqueFileName(Path.GetDirectoryName(file) + Path.DirectorySeparatorChar + DataSafeFileNamePrefix + "[0]" + DataSafeFileExtension);
-					}
+					encryptedFileName = GetVerifiedUniqueFileName(string.Format("{0}{1}{2}[0]{3}", Path.GetDirectoryName(file), Path.DirectorySeparatorChar, dataSafeFileNamePrefix, dataSafeFileExtension));
 
 					using (FileStream inputFile = File.Open(newInputFileName, FileMode.Open, FileAccess.Read, FileShare.None))
 					{
 						using (FileStream outputFile = File.Open(encryptedFileName, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-						{
-							StreamEncryption(headerBytes, inputFile, outputFile, passwordAndFiles.Password);
+						{							
+							StreamEncryption(headerBytes, inputFile, outputFile, GetKeyFromPassword(passwordAndFiles.Password, header.PasswordSalt), header.InitializationVector);
 						}
 					}
 
+					// Try to wipe the file
 					SuperDeleteFile(newInputFileName);
 				}
 				catch (Exception e)
@@ -375,7 +313,7 @@ namespace DataSafeLibrary
 			}
 		}
 
-		void DecryptFiles(PasswordAndFiles passwordAndFiles)
+		private void DecryptFiles(PasswordAndFiles passwordAndFiles)
 		{
 			foreach (string file in passwordAndFiles.Files)
 			{
@@ -385,44 +323,37 @@ namespace DataSafeLibrary
 						FileStarted(file);
 
 					bool decrypted = false;
-					bool outputInputTheSame = false;
-					string outputFileName = null;
+					bool sourceSameAsDest = false;
+					string outputFileName;
 
 					using (FileStream inputFile = File.Open(file, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
 					{
 						// Get the header information
-						byte[] headerBytes = new byte[EncryptionHeader.TotalHeaderSize];
-						inputFile.Read(headerBytes, 0, headerBytes.Length);
+						EncryptionHeader header = new EncryptionHeader(inputFile, passwordAndFiles.Password);
+						outputFileName = header.OriginalFileName;
 
-						inputFile.Position = 0;
+						// Are the destination file and source file the same?  If so, flag it.
+						sourceSameAsDest = Path.GetFileName(file) == outputFileName;
 
-						EncryptionHeader header = new EncryptionHeader(headerBytes, passwordAndFiles.Password);
+						// This is here in case they have another file in this directory that has the same name as the soon-to-be-decrypted file.
+						outputFileName = GetVerifiedUniqueFileName(string.Format("{0}{1}{2}", Path.GetDirectoryName(file), Path.DirectorySeparatorChar, outputFileName));
 
-						if (header.HeaderEncryptionType == EncryptionHeaderType.Rijndael)
+						using (FileStream outputFile = File.Open(outputFileName, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
 						{
-							outputFileName = header.GetHeaderDataAsString();
+							StreamEncryption(inputFile, outputFile, GetKeyFromPassword(passwordAndFiles.Password, header.PasswordSalt), header.InitializationVector);
 
-							if (Path.GetFileName(file) == outputFileName)
-							{
-								// The dest file and source file are the same
-								outputInputTheSame = true;
-							}
-
-							outputFileName = GetVerifiedUniqueFileName(Path.GetDirectoryName(file) + Path.DirectorySeparatorChar + outputFileName);
-
-							using (FileStream outputFile = File.Open(outputFileName, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
-							{
-								StreamEncryption(inputFile, outputFile, passwordAndFiles.Password);
-								decrypted = true;
-							}
+							// Double-checking to make sure we got through the decryption so we don't delete anything otherwise...
+							// This shouldn't be necessary, but it's here anyway :)
+							decrypted = true;
 						}
 					}
 
 					if (decrypted)
 					{
+						// Do a simple delete on the encrypted file... no point in wiping it.
 						File.Delete(file);
 
-						if (outputInputTheSame && outputFileName != null)
+						if (sourceSameAsDest && outputFileName != null)
 							File.Move(outputFileName, file);
 					}
 
@@ -451,32 +382,14 @@ namespace DataSafeLibrary
 			}
 		}
 
-		public string EncryptStringToBase64(string data, string password)
-		{
-			byte[] bytes = UTF8Encoding.UTF8.GetBytes(data);
-
-			BlockEncryption(ref bytes, password, true);
-
-			return Convert.ToBase64String(bytes);
-		}
-
-		public string DecryptBase64String(string data, string password)
-		{
-			byte[] bytes = Convert.FromBase64String(data);
-
-			BlockEncryption(ref bytes, password, false);
-
-			return UTF8Encoding.UTF8.GetString(bytes);
-		}
-
-		static internal byte[] GetKeyFromPassword(string password, byte[] salt)
+		internal static byte[] GetKeyFromPassword(string password, byte[] salt)
 		{
 			Rfc2898DeriveBytes derivedPwd = new Rfc2898DeriveBytes(password, salt, passwordIterations);
 
 			return derivedPwd.GetBytes(passwordSize);
 		}
 
-		static internal byte[] GetKeyFromPassword(string password, out byte[] salt)
+		internal static byte[] GetKeyFromPassword(string password, out byte[] salt)
 		{
 			Rfc2898DeriveBytes derivedPwd = new Rfc2898DeriveBytes(password, passwordSaltSize, passwordIterations);
 
@@ -485,7 +398,7 @@ namespace DataSafeLibrary
 			return derivedPwd.GetBytes(passwordSize);
 		}
 
-		static internal void BlockEncryption(ref byte[] b, byte[] passwordBytes, byte[] initVector, bool encrypt)
+		internal static void BlockEncryption(ref byte[] b, byte[] passwordBytes, byte[] initVector, bool encrypt)
 		{
 			ICryptoTransform xForm = null;
 
@@ -503,27 +416,7 @@ namespace DataSafeLibrary
 			}
 		}
 
-		public byte[] TrimZeros(byte[] bytes)
-		{
-			int end = bytes.Length - 1;
-
-			for (int i = bytes.Length - 1; i >= 0; i--)
-			{
-				if (bytes[i] != 0)
-				{
-					end = i;
-					break;
-				}
-			}
-
-			byte[] output = new byte[end + 1];
-
-			Buffer.BlockCopy(bytes, 0, output, 0, output.Length);
-
-			return output;
-		}
-
-		string GetVerifiedUniqueFileName(string fileName)
+		private string GetVerifiedUniqueFileName(string fileName)
 		{
 			if (!File.Exists(fileName))
 				return fileName;
@@ -541,12 +434,12 @@ namespace DataSafeLibrary
 			return GetVerifiedUniqueFileName(Path.GetDirectoryName(fileName) + Path.DirectorySeparatorChar + Path.GetFileNameWithoutExtension(fileName) + "[0]" + Path.GetExtension(fileName));
 		}
 
-		void StreamEncryption(Stream inputStream, Stream outputStream, string password)
+		private void StreamEncryption(Stream inputStream, Stream outputStream, byte[] password, byte[] iv)
 		{
-			StreamEncryption(null, inputStream, outputStream, password);
+			StreamEncryption(null, inputStream, outputStream, password, iv);
 		}
 
-		void StreamEncryption(byte[] headerInfo, Stream inputStream, Stream outputStream, string password)
+		private void StreamEncryption(byte[] headerInfo, Stream inputStream, Stream outputStream, byte[] password, byte[] iv)
 		{
 			ICryptoTransform xForm = null;
 
@@ -556,17 +449,12 @@ namespace DataSafeLibrary
 				aes.Mode = CipherMode.CBC;
 				aes.Padding = PaddingMode.PKCS7;
 
-				using (xForm = headerInfo != null ? aes.CreateEncryptor(GetKeyFromPassword(password), DataSafeIV) : aes.CreateDecryptor(GetKeyFromPassword(password), DataSafeIV))
+				using (xForm = headerInfo != null ? aes.CreateEncryptor(password, iv) : aes.CreateDecryptor(password, iv))
 				{
 					if (headerInfo != null)
 					{
 						// Encryption operation - add the header data first
 						outputStream.Write(headerInfo, 0, headerInfo.Length);
-					}
-					else
-					{
-						// Decrypting operation - set the input position to the header length
-						inputStream.Position = EncryptionHeader.TotalHeaderSize;
 					}
 
 					using (CryptoStream cryptoStream = new CryptoStream(outputStream, xForm, CryptoStreamMode.Write))
@@ -593,20 +481,62 @@ namespace DataSafeLibrary
 			}
 		}
 
-		void SuperDeleteFile(string fileName)
+		public static void EncryptDecryptCTR(Stream inputStream, Stream outputStream, byte[] iv, byte[] password)
 		{
-			if (WipeSourceFiles)
+			using (Aes cryptoProvider = AesCryptoServiceProvider.Create())
 			{
-				for (int i = 0; i < WipeSourceFilesPasses; i++)
+				cryptoProvider.Mode = CipherMode.ECB;
+				cryptoProvider.Padding = PaddingMode.None; // no padding in CTR
+				cryptoProvider.Key = password;
+				int blockSizeInBytes = cryptoProvider.BlockSize / 8;
+
+				using (ICryptoTransform encryptor = cryptoProvider.CreateEncryptor(cryptoProvider.Key, cryptoProvider.IV))
 				{
-					OverwriteFile(i + 1, WipeSourceFilesPasses, fileName);
+					Parallel.For(0L, inputStream.Length / blockSizeInBytes + 1, counter =>
+					{
+						byte[] oneTimePad = new byte[blockSizeInBytes];
+						encryptor.TransformBlock(iv.Concat(BitConverter.GetBytes(counter)).ToArray(), 0, blockSizeInBytes, oneTimePad, 0);
+
+						int position = (int)counter * blockSizeInBytes;
+
+						byte[] xOrArray = new byte[blockSizeInBytes];
+						inputStream.Read(xOrArray, position, blockSizeInBytes);
+
+						byte[] xOrd = Xor2Arrays(xOrArray, position, oneTimePad);
+
+						outputStream.Write(xOrd, position, xOrd.Length);
+					});
+				}
+			}
+		}
+
+		public static byte[] Xor2Arrays(byte[] array1, int position, byte[] array2)
+		{
+			int size = Math.Min(array1.Length - position, array2.Length);
+			byte[] result = new byte[size];
+
+			for (int i = 0; i < size; i++)
+			{
+				result[i] = (byte)(array1[position + i] ^ array2[i]);
+			}
+
+			return result;
+		}
+
+		private void SuperDeleteFile(string fileName)
+		{
+			if (settings.MakeSourceUnrecoverable)
+			{
+				for (int i = 0; i < settings.WipeSourceFilesPasses; i++)
+				{
+					OverwriteFile(i + 1, settings.WipeSourceFilesPasses, fileName);
 				}
 			}
 
 			File.Delete(fileName);
 		}
 
-		void OverwriteFile(int currentPass, int totalPasses, string fileName)
+		private void OverwriteFile(int currentPass, int totalPasses, string fileName)
 		{
 			File.SetAttributes(fileName, FileAttributes.Normal);
 
@@ -617,7 +547,7 @@ namespace DataSafeLibrary
 					// 24 is the RSA-AES CSP
 					RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider(new CspParameters(24));
 
-					rng.GetBytes(buffer);
+					rng.GetBytes(writeBuffer);
 
 					// Writing more than the file size (unless it comes out to be the exact size of the buffer *n) will mask the original filesize
 					long bytesToWrite = fileToOverwrite.Length;
@@ -625,9 +555,9 @@ namespace DataSafeLibrary
 
 					while (bytesToWrite > 0)
 					{
-						fileToOverwrite.Write(buffer, 0, buffer.Length);
+						fileToOverwrite.Write(writeBuffer, 0, writeBuffer.Length);
 
-						bytesToWrite -= buffer.Length;
+						bytesToWrite -= writeBuffer.Length;
 
 						if (WipingSourceFileBlockFinished != null)
 							WipingSourceFileBlockFinished(currentPass, totalPasses, originalFileSize, originalFileSize - bytesToWrite);

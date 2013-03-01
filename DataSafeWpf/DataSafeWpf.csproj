@@ -127,7 +127,7 @@
     <Compile Include="AboutWindow.xaml.cs">
       <DependentUpon>AboutWindow.xaml</DependentUpon>
     </Compile>
-    <Compile Include="Settings.cs" />
+    <Compile Include="DataSafeRegistrySettings.cs" />
     <Compile Include="PasswordWindow.xaml.cs">
       <DependentUpon>PasswordWindow.xaml</DependentUpon>
     </Compile>
@@ -167,6 +167,10 @@
     <ProjectReference Include="..\DataSafeLibrary\DataSafeLibrary.csproj">
       <Project>{2892C9CD-D4CF-4C6A-A176-40600D2950F9}</Project>
       <Name>DataSafeLibrary</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\WpfEnhancements\WpfEnhancements.csproj">
+      <Project>{b78fbcce-1ae8-4a6e-b61b-2b489bd151f0}</Project>
+      <Name>WpfEnhancements</Name>
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>

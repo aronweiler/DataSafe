@@ -15,7 +15,7 @@
 			</StackPanel>
 		</GroupBox>
 		<GroupBox Grid.Row="1" Header="Usage">
-			<TextBlock Margin="5" TextWrapping="WrapWithOverflow">The DataSafe Encryption Application is very easy to use.  Just drag the files or directories you want to encrypt into the 'ENCRYPT' box, and the files you want to decrypt into the 'DECRYPT' box.   After entering a password, DataSafe will then encrypt your file using AES and a strong 196 bit key.</TextBlock>
+			<TextBlock Margin="5" TextWrapping="WrapWithOverflow">The DataSafe Encryption Application is very easy to use.  Just drag the files or directories you want to encrypt into the 'ENCRYPT' box, and the files you want to decrypt into the 'DECRYPT' box.   After entering a password, DataSafe will then encrypt your file using the AES encryption algorithm, and wipe the source file.</TextBlock>
 		</GroupBox>
 		<Button IsCancel="True" IsDefault="True" Margin="5" Grid.Row="2" Content="OK" Width="75" HorizontalAlignment="Right" Click="Button_Click"></Button>
 	</Grid>

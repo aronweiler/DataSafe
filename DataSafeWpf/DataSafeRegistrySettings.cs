@@ -6,7 +6,7 @@ using Microsoft.Win32;
 
 namespace DataSafeWpf
 {
-	public class Settings
+	public static class DataSafeRegistrySettings
 	{
 		const string DataSafeEncryptedFile = "DataSafeEncryptedFile";
 

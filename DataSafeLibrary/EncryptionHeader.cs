@@ -1,163 +1,200 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 
 namespace DataSafeLibrary
 {
     // Data Safe v3.0 Header Layout:
-	// | Static Header ID | Version | Init Vector | Password Salt | Header Length | Original Filename | Original Modification Date |
-	// |     10 bytes     | 2 bytes |    8 bytes  |    8 bytes    |    2 bytes    |     255 bytes     |          8 bytes           |
-	// |                  Unencrypted											  |				Encrypted						   |
-
-	public class HeaderInfo
-	{
-		public const int StaticHeaderIdPosition = 0;
-		public const int StaticHeaderIdSize = 10;
-
-		public const int VersionPosition = StaticHeaderIdPosition + StaticHeaderIdSize;
-		public const int VersionSize = 2;
-
-		public const int IvPosition = VersionPosition + VersionSize;
-		public const int IvSize = 8;
-
-		public const int PasswordSaltPosition = IvPosition + IvSize;
-		public const int PasswordSaltSize = 8;
-
-		public const int HeaderLengthPosition = PasswordSaltPosition + PasswordSaltSize;
-		public const int HeaderLengthSize = 2;
-
-		public const int OriginalFileNamePosition = HeaderLengthPosition + HeaderLengthSize;
-		public const int OriginalFileNameSize = 255;
-
-		public const int OriginalModificationDatePosition = OriginalFileNamePosition + OriginalFileNameSize;
-		public const int OriginalModificationDateSize = 8;
-	}
-
+	// | Static Header ID | Version | Init Vector  | Password Salt | Header Length | Original Modification Date | Original Filename Size | Original Filename |
+	// |     10 bytes     | 2 bytes |    16 bytes  |    8 bytes    |    2 bytes    |          8 bytes           |		1 byte			 |     variable      |
+	// |							Unencrypted									   |							Encrypted								     |
+	
     public class EncryptionHeader
     {
 		static readonly byte[] staticHeaderId = new byte[] { 6, 6, 6, 1, 1, 1, 3, 3, 3, 5 };
 		static readonly byte[] applicationVersion = new byte[] { 3, 0 };
 
-        static readonly int unencryptedHeaderLength = 22;
+		static readonly int unencryptedHeaderLength =
+			HeaderInfo.StaticHeaderIdSize +
+			HeaderInfo.VersionSize +
+			HeaderInfo.IvSize +
+			HeaderInfo.PasswordSaltSize +
+			HeaderInfo.HeaderLengthSize;
+
+		byte[] passwordSalt;
 
 		public static int UnencryptedHeaderLength
         {
 			get { return unencryptedHeaderLength; }
         }
 
-		public string OriginalFileName { get; set; }
-		public DateTime OriginalModificationDate { get; set; }
+		public string OriginalFileName { get; private set; }
+		public DateTime OriginalModificationDate { get; private set; }
+		public byte[] InitializationVector { get; private set; }		
+
+		public byte[] PasswordSalt
+		{
+			get { return passwordSalt; }
+			private set { passwordSalt = value; }
+		}
+
+		/// <summary>
+		/// [Encryption Operations] Create new EncryptionHeader bytes from the passed parameters
+		/// </summary>
+		public EncryptionHeader(string originalFileName, DateTime originalModificationDate)
+		{
+			if (string.IsNullOrEmpty(originalFileName))
+				throw new ArgumentNullException("originalFileName");
+
+			OriginalFileName = originalFileName;
+			OriginalModificationDate = originalModificationDate;
+		}
 
         /// <summary>
-        /// Create a new EncryptionHeader class from the specified bytes and password
+		/// [Decryption Operations] Create a new EncryptionHeader class from the specified bytes (encrypted file) and password
         /// </summary>
-        public EncryptionHeader(byte[] headerBytes, string password)
+        public EncryptionHeader(Stream header, string password)
         {
-            if (headerBytes.Length < unencryptedHeaderLength)
-                throw new ArgumentException("headerBytes is too short");
+            if (header.Length < unencryptedHeaderLength)
+				throw new ArgumentException("header is too short");
+
+			BinaryReader binaryReader = new BinaryReader(header);
 
 			// Make sure the file we're trying to open is the right type
-			if (CheckFileType(headerBytes))
+			if (CheckFileType(binaryReader))
 			{
 				// Now that we're sure we have a valid file type, do we have a password to use to decrypt the encrypted header?
 				if (!string.IsNullOrEmpty(password))
 				{
-					// Get the length of the remaining encrypted header
-					ushort encryptedHeaderLength = BitConverter.ToUInt16(headerBytes, HeaderInfo.HeaderLengthPosition);
-
-					if (encryptedHeaderLength == 0)
-						throw new InvalidOperationException("Header length is invalid");
-
 					// Get the initialization vector
-					byte[] initVector = new byte[HeaderInfo.IvSize];
-					Buffer.BlockCopy(headerBytes, HeaderInfo.IvPosition, initVector, 0, HeaderInfo.IvSize);
+					InitializationVector = binaryReader.ReadBytes(HeaderInfo.IvSize);
 
 					// Get the password salt
-					byte[] passwordSalt = new byte[HeaderInfo.PasswordSaltSize];
-					Buffer.BlockCopy(headerBytes, HeaderInfo.PasswordSaltPosition, passwordSalt, 0, HeaderInfo.PasswordSaltSize);
+					PasswordSalt = binaryReader.ReadBytes(HeaderInfo.PasswordSaltSize);
+
+					// Get the length of the remaining encrypted header
+					ushort encryptedHeaderLength = (ushort)(binaryReader.ReadUInt16() - HeaderInfo.EncryptedHeaderPosition);
+
+					if (encryptedHeaderLength <= 0)
+						throw new InvalidOperationException("Header length is invalid");
 
 					// Using the IV, salt and password, get the password derived bytes
-					byte[] passwordBytes = Encryption.GetKeyFromPassword(password, passwordSalt);
+					byte[] passwordBytes = Encryption.GetKeyFromPassword(password, PasswordSalt);
 
 					// Pull out the remaining encrypted header
-					byte[] encryptedHeader = new byte[encryptedHeaderLength];
-					Buffer.BlockCopy(headerBytes, HeaderInfo.OriginalFileNamePosition, encryptedHeader, 0, encryptedHeaderLength);
+					byte[] encryptedHeader = binaryReader.ReadBytes(encryptedHeaderLength);
 
 					// Decrypt the remaining encrypted header
-					Encryption.BlockEncryption(ref encryptedHeader, passwordBytes, initVector, false);
+					Encryption.BlockEncryption(ref encryptedHeader, passwordBytes, InitializationVector, false);
+
+					// Get the original modification date
+					long originalModificationDateInTicks = BitConverter.ToInt64(encryptedHeader, HeaderInfo.OriginalModificationDatePosition);
+					OriginalModificationDate = DateTime.FromBinary(originalModificationDateInTicks);
+
+					byte originalFileNameLength = encryptedHeader[HeaderInfo.OriginalFileNameLengthPosition];
 
 					// Pull out the decrypted original file name
-					byte[] originalFileName = new byte[HeaderInfo.OriginalFileNameSize];
-					Buffer.BlockCopy(encryptedHeader, 0, originalFileName, 0, HeaderInfo.OriginalFileNameSize);
+					byte[] originalFileName = new byte[originalFileNameLength];
+					Buffer.BlockCopy(encryptedHeader, HeaderInfo.OriginalFileNamePosition, originalFileName, 0, originalFileNameLength);
 
 					OriginalFileName = ASCIIEncoding.ASCII.GetString(originalFileName);
-
-					long originalModificationDateInTicks = BitConverter.ToInt64(encryptedHeader, HeaderInfo.OriginalFileNameSize);
-
-					OriginalModificationDate = DateTime.FromBinary(originalModificationDateInTicks);					
 				}
+			}
+			else
+			{
+				throw new InvalidOperationException("Invalid DataSafe header");
 			}
         }
 
-		public static bool CheckFileType(byte[] headerBytes)
+		/// <summary>
+		/// Create a byte array containing the encryption header with specified parameters
+		/// </summary>
+		public byte[] Create(byte[] initilizationVector, string password)
 		{
-			byte[] staticHeaderBytes = new byte[HeaderInfo.StaticHeaderIdSize];
-			Buffer.BlockCopy(headerBytes, HeaderInfo.StaticHeaderIdPosition, staticHeaderBytes, 0, HeaderInfo.StaticHeaderIdSize);
+			if (string.IsNullOrEmpty(password))
+				throw new ArgumentNullException("password");
+
+			if (initilizationVector.Length != HeaderInfo.IvSize)
+				throw new ArgumentException("field is incorrect length", "initilizationVector");
+
+			InitializationVector = initilizationVector;
+			
+			int fileNameLength = ASCIIEncoding.ASCII.GetByteCount(OriginalFileName);
+
+			if(fileNameLength > 255)
+				throw new NotSupportedException("Original file name must be fewer than 255 characters in length");
+
+			// Create the byte array with values to be encrypted
+			byte[] encryptedValues = new byte[HeaderInfo.OriginalModificationDateSize + HeaderInfo.OriginalFileNameLengthSize + fileNameLength];
+
+			// Copy the modification date in
+			Buffer.BlockCopy(BitConverter.GetBytes(OriginalModificationDate.ToBinary()), 0, encryptedValues, 0, HeaderInfo.OriginalModificationDateSize);
+
+			// Set the file name length
+			encryptedValues[HeaderInfo.OriginalModificationDateSize] = (byte)fileNameLength;
+
+			// Copy the file name in
+			Buffer.BlockCopy(ASCIIEncoding.ASCII.GetBytes(OriginalFileName), 0, encryptedValues, HeaderInfo.OriginalModificationDateSize + 1, fileNameLength);
+
+			// Using the IV, salt and password, get the password derived bytes
+			byte[] passwordBytes = Encryption.GetKeyFromPassword(password, out passwordSalt);
+
+			// Encrypt this portion of the header
+			Encryption.BlockEncryption(ref encryptedValues, passwordBytes, InitializationVector, true);
+
+			// Create the main header array
+			byte[] header = new byte[unencryptedHeaderLength + encryptedValues.Length];
+
+			// Put in the static header id
+			Buffer.BlockCopy(staticHeaderId, 0, header, HeaderInfo.StaticHeaderIdPosition, HeaderInfo.StaticHeaderIdSize);
+
+			// Put the version in
+			Buffer.BlockCopy(applicationVersion, 0, header, HeaderInfo.VersionPosition, HeaderInfo.VersionSize);
+
+			// Put the IV in
+			Buffer.BlockCopy(InitializationVector, 0, header, HeaderInfo.IvPosition, HeaderInfo.IvSize);
+
+			// Put the password salt in
+			Buffer.BlockCopy(PasswordSalt, 0, header, HeaderInfo.PasswordSaltPosition, HeaderInfo.PasswordSaltSize);
+
+			// Put the header length in
+			Buffer.BlockCopy(BitConverter.GetBytes(header.Length), 0, header, HeaderInfo.HeaderLengthPosition, HeaderInfo.HeaderLengthSize);
+
+			// Tack on the encrypted part of the header
+			Buffer.BlockCopy(encryptedValues, 0, header, HeaderInfo.EncryptedHeaderPosition, encryptedValues.Length);
+
+			return header;
+		}
+
+		public static bool CheckFileType(BinaryReader headerStream)
+		{
+			byte[] staticHeaderBytes = headerStream.ReadBytes(HeaderInfo.StaticHeaderIdSize);
 
 			// Compare the static header id on the file with the one in the app
 			if (!CompareArrays(staticHeaderId, staticHeaderBytes))
 				return false;
 
-			byte[] versionBytes = new byte[HeaderInfo.VersionSize];
-			Buffer.BlockCopy(headerBytes, HeaderInfo.VersionPosition, versionBytes, 0, HeaderInfo.VersionSize);
+			byte[] versionBytes = headerStream.ReadBytes(HeaderInfo.VersionSize);
 
 			// Verify the header version matches the app version
 			if (!CompareArrays(applicationVersion, versionBytes))
 				return false;
 
 			return true;
-		}        
+		}      
 
-        public EncryptionHeader(EncryptionHeaderType headerType, string headerPayload)
-            : this(headerType, UTF8Encoding.UTF8.GetBytes(headerPayload))
-        {        
-        }
-
-        public EncryptionHeader(EncryptionHeaderType headerType, byte[] headerPayload)
-        {
-            if (headerPayload.Length > unencryptedDataLength)
-                throw new ArgumentException("headerPayload is too large.");
-
-            int len = headerPayload.Length;
-
-            if (len > unencryptedDataLength)
-                len = unencryptedDataLength;
-
-            Buffer.BlockCopy(headerPayload, 0, headerData, 0, len);
-            this.headerEncryptionType = headerType;
-        }       
-
-        public byte[] GetEncryptedHeader(string password)
-        {
-            byte[] encryptedHeaderData = Encryption.Instance.TrimZeros(headerData);
-            byte[] completeHeader = new byte[TotalHeaderSize];
-
-            Encryption.Instance.BlockEncryption(ref encryptedHeaderData, password, true);              
-            
-            // Copy the aes encryption id in
-            Buffer.BlockCopy(EncryptionTypes.AesEncryptionId, 0, completeHeader, 0, EncryptionTypes.AesEncryptionId.Length);
-
-            // Copy the actual header in
-            Buffer.BlockCopy(encryptedHeaderData, 0, completeHeader, EncryptionTypes.AesEncryptionId.Length, encryptedHeaderData.Length);
-
-            return completeHeader;            
-        }
-
-        public string GetHeaderDataAsString()
-        {
-            return UTF8Encoding.UTF8.GetString(Encryption.Instance.TrimZeros(headerData));
-        }
+		public static bool CheckFileType(byte[] headerBytes)
+		{
+			using (MemoryStream ms = new MemoryStream(headerBytes))
+			{
+				using (BinaryReader br = new BinaryReader(ms))
+				{
+					return CheckFileType(br);
+				}
+			}			
+		}        		
 
         static bool CompareArrays(byte[] array1, byte[] array2)
         {
